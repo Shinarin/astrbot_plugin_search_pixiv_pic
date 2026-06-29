@@ -368,9 +368,10 @@ class IntentParser:
 ## 规则
 1. 如果能确定角色属于哪个游戏/作品，填写 game 字段。
 2. 如果角色名是中文昵称/简称（如"尼可"、"胡桃"），填写你知道的日文原名到 character。
-3. need_web_search: 如果你**不确定**这个角色是谁、属于哪个作品、或不确定角色的日文名，设为 true。
-4. 对于热门角色（原神、崩铁、FGO、NIKKE 等知名游戏角色），你通常能直接识别，need_web_search 应为 false。
-5. 对于非常冷门、新出、或你完全不知道的角色，need_web_search 应为 true。
+3. **关键**：先判断搜索词中是否包含具体角色名。如果只有作品名/属性/风格（如"碧蓝航线 大胸 黑丝"、"原神 风景"），character 留空，need_web_search 必须为 false。不要强行猜测或编造角色名。
+4. need_web_search: 仅当你**识别到了角色名**但**不确定**是谁/属于哪个作品/日文名时，才设为 true。没有角色名时一律 false。
+5. 对于热门角色（原神、崩铁、FGO、NIKKE 等知名游戏角色），你通常能直接识别，need_web_search 应为 false。
+6. 对于非常冷门、新出、或你完全不知道的角色，need_web_search 应为 true。
 
 ## 示例
 用户搜索: "原神角色天使尼可"
@@ -379,8 +380,14 @@ class IntentParser:
 用户搜索: "nikke灰姑娘"
 {"game": "NIKKE", "character": "アナキオール", "need_web_search": false, "note": "NIKKE角色灰姑娘，日文名アナキオール"}
 
+用户搜索: "碧蓝航线 大胸 黑丝"
+{"game": "アズールレーン", "character": "", "need_web_search": false, "note": "只有作品名和属性，没有具体角色"}
+
 用户搜索: "猫耳少女"
 {"game": "", "character": "", "need_web_search": false, "note": "通用标签，非特定角色"}
+
+用户搜索: "原神 神里綾華"
+{"game": "原神", "character": "神里綾華", "need_web_search": false, "note": "知名角色，可直接识别"}
 
 用户搜索: "xxx2025新番女主"
 {"game": "", "character": "xxx", "need_web_search": true, "note": "不确定这个角色，需要联网确认"}
@@ -388,7 +395,7 @@ class IntentParser:
 现在分析以下搜索词（只返回 JSON）：
 """
 
-    async def resolve_search_intent(self, user_tag: str, umo: str = "") -> dict:
+    async def resolve_search_intent(self, user_tag: str, event=None, umo: str = "") -> dict:
         """
         解析用户搜索意图：识别游戏/作品 + 角色名，必要时联网搜索。
 
@@ -399,11 +406,14 @@ class IntentParser:
 
         Args:
             user_tag: 用户原始搜索词。
+            event:    AstrMessageEvent（用于工具执行上下文）。
+            umo:      unified_msg_origin。
 
         Returns:
             {"game": str, "character": str, "resolved": bool, "note": str}
         """
         result = {"game": "", "character": "", "resolved": False, "note": ""}
+        need_web = False  # 提前声明，Step 2 门控用
 
         # ---- Step 1: LLM 初步识别 ----
         prompt = self.CHARACTER_RESOLVE_PROMPT + f"\n用户搜索: {user_tag}"
@@ -420,6 +430,7 @@ class IntentParser:
                 result["note"] = data.get("note", "")
                 need_web = data.get("need_web_search", False)
 
+                # 情况 A: 有角色名且 LLM 确定 → 直接返回，无需联网
                 if not need_web and result["character"]:
                     result["resolved"] = True
                     logger.info(
@@ -428,6 +439,16 @@ class IntentParser:
                     )
                     return result
 
+                # 情况 B: 无角色名（如"碧蓝航线 大胸 黑丝"）→ 无需联网
+                if not need_web and not result["character"]:
+                    logger.info(
+                        f"[pixiv:intent] 🏷️ 无角色名，跳过联网搜索: "
+                        f"'{user_tag}' → game='{result.get('game', '')}', "
+                        f"note='{result.get('note', '')}'"
+                    )
+                    return result
+
+                # 情况 C: 有角色名但 LLM 不确定 → 进入 Step 2 联网搜索
                 if need_web:
                     logger.info(
                         f"[pixiv:intent] 🔍 LLM 不确定角色，尝试联网搜索: "
@@ -436,28 +457,40 @@ class IntentParser:
             except (json.JSONDecodeError, TypeError) as e:
                 logger.warning(f"[pixiv:intent] 角色解析 JSON 失败: {e}")
 
-        # ---- Step 2: 联网搜索确认角色 ----
-        try:
-            resolved = await self._web_search_character(user_tag, umo)
-            if resolved:
-                result["game"] = resolved.get("game", result["game"])
-                result["character"] = resolved.get("character", result["character"])
-                result["resolved"] = True
-                result["note"] = resolved.get("note", "联网搜索确认")
-                logger.info(
-                    f"[pixiv:intent] 🌐 联网搜索完成: game='{result['game']}', "
-                    f"character='{result['character']}'"
-                )
-        except Exception as e:
-            logger.warning(f"[pixiv:intent] 联网搜索失败: {e}")
+        # ---- Step 2: 联网搜索确认角色（仅在 need_web=True 时执行）----
+        if need_web:
+            try:
+                resolved = await self._web_search_character(user_tag, event, umo)
+                if resolved:
+                    result["game"] = resolved.get("game", result["game"])
+                    result["character"] = resolved.get("character", result["character"])
+                    result["resolved"] = True
+                    result["note"] = resolved.get("note", "联网搜索确认")
+                    logger.info(
+                        f"[pixiv:intent] 🌐 联网搜索完成: game='{result['game']}', "
+                        f"character='{result['character']}'"
+                    )
+            except Exception as e:
+                logger.warning(f"[pixiv:intent] 联网搜索失败: {e}")
 
         return result
 
-    async def _web_search_character(self, user_tag: str, umo: str = "") -> dict | None:
+    async def _web_search_character(self, user_tag: str, event, umo: str = "") -> dict | None:
         """
         使用 AstrBot 内置联网搜索工具查找角色信息。
 
-        通过 LLM + web_search tool 组合：让 LLM 搜索角色信息并提取关键字段。
+        实现手动工具循环：
+          1. LLM(带工具) 决定搜索策略 → 返回 tool_call 或直接文本
+          2. 若 tool_call → 插件执行搜索工具 → 格式化结果 → 回传 LLM 分析
+          3. 若直接文本 → 提取 JSON
+
+        这避免了 llm_generate 不执行工具的问题（completion_text=None），
+        由插件自行完成 「LLM → 搜索 → 格式化 → LLM 分析」的闭环。
+
+        Args:
+            user_tag: 用户原始搜索词。
+            event:    AstrMessageEvent（创建工具执行上下文所需）。
+            umo:      unified_msg_origin。
 
         Returns:
             {"game": str, "character": str, "note": str} 或 None。
@@ -465,12 +498,9 @@ class IntentParser:
         if not self._context:
             return None
 
-        # 获取 AstrBot 内置 web_search 工具
-        # 照搬 AstrBot 源码 _apply_web_search_tools 的做法：
-        #   读会话配置 websearch_provider → 映射工具类 → get_builtin_tool()
+        # ---- 获取 AstrBot 内置 web_search 工具 ----
         tool_manager = self._context.get_llm_tool_manager()
 
-        # 读取当前会话的 provider_settings（需 umo 获取正确的会话配置）
         cfg = self._context.get_config(umo=umo) if umo else self._context.get_config()
         prov_settings = cfg.get("provider_settings", {})
         provider = prov_settings.get("websearch_provider", "tavily")
@@ -492,50 +522,271 @@ class IntentParser:
         tool_cls = tool_class_map.get(provider)
         web_tool = tool_manager.get_builtin_tool(tool_cls) if tool_cls else None
 
-        if web_tool:
-            logger.info(
-                f"[pixiv:intent] 🌐 使用联网工具: {web_tool.name} "
-                f"(provider={provider})"
-            )
-        else:
+        if not web_tool:
             logger.info(
                 f"[pixiv:intent] 🌐 无可用联网搜索工具 "
                 f"(provider={provider or '未配置'})，跳过"
             )
             return None
 
-        # 构建 tool_set 并调用 LLM
+        logger.info(
+            f"[pixiv:intent] 🌐 使用联网工具: {web_tool.name} "
+            f"(provider={provider})"
+        )
+
+        # ---- 获取 LLM provider ----
+        providers = self._context.get_all_providers()
+        provider_id = self._config.get("llm_provider_id", "")
+        if not provider_id and providers:
+            provider_id = providers[0].meta().id
+
+        system_prompt = (
+            "你是二次元角色搜索专家。使用搜索工具查找角色信息，只返回 JSON。"
+        )
+
+        search_prompt = (
+            f"请搜索「{user_tag}」是哪个游戏/动漫作品的哪个角色。\n"
+            f"找到后，请用工具搜索确认角色的日文原名。\n"
+            f"最后用 JSON 回复: "
+            f'{{"game": "作品名", "character": "日文角色名", "note": "来源说明"}}'
+        )
+
         try:
             from astrbot.api import ToolSet
             tool_set = ToolSet()
             tool_set.add_tool(web_tool)
 
-            search_prompt = (
-                f"请搜索「{user_tag}」是哪个游戏/动漫作品的哪个角色。\n"
-                f"找到后，请用工具搜索确认角色的日文原名。\n"
-                f"最后用 JSON 回复: "
-                f'{{"game": "作品名", "character": "日文角色名", "note": "来源说明"}}'
-            )
-
-            providers = self._context.get_all_providers()
-            provider_id = self._config.get("llm_provider_id", "")
-            if not provider_id and providers:
-                provider_id = providers[0].meta().id
-
+            # ============================================================
+            # Phase 1: LLM 决定搜索策略（带工具）
+            # ============================================================
             resp = await self._context.llm_generate(
                 chat_provider_id=provider_id,
                 prompt=search_prompt,
-                system_prompt="你是二次元角色搜索专家。使用搜索工具查找角色信息，只返回 JSON。",
+                system_prompt=system_prompt,
                 tools=tool_set,
             )
-            text = resp.completion_text.strip() if hasattr(resp, 'completion_text') else ""
+
+            # ============================================================
+            # Phase 2: 检测 LLM 是否想要调用工具
+            # ============================================================
+            if resp.tools_call_name:
+                logger.info(
+                    f"[pixiv:intent] 🔧 LLM 请求调用工具: "
+                    f"{resp.tools_call_name} "
+                    f"args={resp.tools_call_args[0] if resp.tools_call_args else '{}'}"
+                )
+
+                # ---- 2a: 插件执行搜索工具 ----
+                tool_args = resp.tools_call_args[0] if resp.tools_call_args else {}
+                raw_results = await self._execute_web_search_tool(
+                    web_tool, tool_args, event
+                )
+
+                # ---- 2b: 格式化原始结果（转换为 LLM 易读的纯文本）----
+                formatted = self._format_web_search_results(raw_results)
+                logger.info(
+                    f"[pixiv:intent] 📋 搜索结果已格式化 "
+                    f"(长度={len(formatted)} 字符)"
+                )
+
+                # ---- 2c: 构建工具调用上下文消息 ----
+                contexts = self._build_tool_result_contexts(resp, formatted)
+
+                # ============================================================
+                # Phase 3: 将搜索结果回传 LLM 分析
+                # ============================================================
+                analyze_prompt = (
+                    f"请根据以上搜索结果，分析「{user_tag}」是哪个作品的哪个角色，"
+                    f"并确认日文原名。最后用 JSON 回复: "
+                    f'{{"game": "作品名", "character": "日文角色名", "note": "来源说明"}}'
+                )
+                resp2 = await self._context.llm_generate(
+                    chat_provider_id=provider_id,
+                    prompt=analyze_prompt,
+                    contexts=contexts,
+                    system_prompt=system_prompt,
+                    tools=None,
+                )
+                text = (resp2.completion_text or "").strip()
+            else:
+                # ---- LLM 直接返回文本（未调用工具）----
+                text = (resp.completion_text or "").strip()
+
+            # ============================================================
+            # Phase 4: 提取 JSON 结果
+            # ============================================================
             if text:
                 json_str = self._extract_json(text)
-                return json.loads(json_str)
+                result = json.loads(json_str)
+                logger.info(
+                    f"[pixiv:intent] 🌐 联网搜索角色解析结果: "
+                    f"game='{result.get('game', '')}', "
+                    f"character='{result.get('character', '')}'"
+                )
+                return result
+
         except Exception as e:
-            logger.warning(f"[pixiv:intent] 联网搜索调用失败: {e}")
+            logger.warning(
+                f"[pixiv:intent] 联网搜索调用失败: {e}",
+                exc_info=True,
+            )
 
         return None
+
+    # ==================================================================
+    # 手动工具循环 —— 辅助方法
+    # ==================================================================
+
+    async def _execute_web_search_tool(
+        self, web_tool, tool_args: dict, event
+    ) -> str:
+        """
+        直接执行 AstrBot 内置联网搜索工具。
+
+        创建工具所需的 ContextWrapper[AstrAgentContext] 后调用 tool.call()。
+
+        Args:
+            web_tool:  FunctionTool 实例（如 TavilyWebSearchTool）。
+            tool_args: LLM 返回的工具参数 dict（含 query 等）。
+            event:     AstrMessageEvent。
+
+        Returns:
+            搜索结果字符串（JSON 格式或错误信息）。
+        """
+        from astrbot.core.agent.run_context import ContextWrapper
+        from astrbot.core.astr_agent_context import AstrAgentContext
+
+        agent_ctx = AstrAgentContext(context=self._context, event=event)
+        run_context = ContextWrapper(context=agent_ctx)
+
+        # 提取核心参数，过滤掉 LLM 可能传的无关参数
+        query = tool_args.get("query", "")
+        valid_params = {"query": query}
+        for key in ("max_results", "search_depth", "topic", "days"):
+            if key in tool_args:
+                valid_params[key] = tool_args[key]
+
+        logger.info(
+            f"[pixiv:intent] 🔍 执行搜索: query='{query}' "
+            f"params={valid_params}"
+        )
+
+        result = await web_tool.call(context=run_context, **valid_params)
+
+        # ToolExecResult = str | mcp.types.CallToolResult
+        # 对于 web_search 工具，返回值是 JSON 字符串
+        if isinstance(result, str):
+            return result
+
+        # 处理 CallToolResult 格式
+        try:
+            if hasattr(result, 'content'):
+                parts = []
+                for item in result.content:
+                    if hasattr(item, 'text'):
+                        parts.append(item.text)
+                return "\n".join(parts)
+        except Exception:
+            pass
+
+        return str(result)
+
+    def _format_web_search_results(self, raw_result: str) -> str:
+        """
+        将原始搜索结果格式化为 LLM 易读的纯文本。
+
+        原始格式（JSON）:
+          {"results": [{"title":..., "url":..., "snippet":..., "index":...}, ...]}
+
+        输出格式:
+          [1] 标题
+          URL: ...
+          摘要: ...
+
+          [2] ...
+        """
+        try:
+            data = json.loads(raw_result)
+            results = data.get("results", [])
+            if not results:
+                return raw_result
+
+            lines = []
+            for item in results:
+                idx = item.get("index", "?")
+                title = item.get("title", "无标题")
+                url = item.get("url", "")
+                snippet = item.get("snippet", "")
+
+                lines.append(f"[{idx}] {title}")
+                if url:
+                    lines.append(f"URL: {url}")
+                if snippet:
+                    lines.append(f"摘要: {snippet}")
+                lines.append("")  # 空行分隔
+
+            return "\n".join(lines)
+        except (json.JSONDecodeError, TypeError, AttributeError):
+            # 不是 JSON 或格式不符预期，原样返回
+            return raw_result
+
+    def _build_tool_result_contexts(
+        self, llm_response, formatted_results: str
+    ) -> list:
+        """
+        构建包含工具调用和结果的消息上下文列表。
+
+        模拟 OpenAI 工具调用协议:
+          - AssistantMessage(tool_calls=[...], content=None)
+          - ToolMessage(tool_call_id=..., content=...)
+
+        这些消息作为 contexts 参数传给第二次 llm_generate 调用，
+        让 LLM 看到「自己调用了工具 + 工具返回了什么」。
+
+        Args:
+            llm_response:      第一次 LLM 响应（含 tools_call_name/args/ids）。
+            formatted_results:  格式化后的搜索结论文本。
+
+        Returns:
+            list[Message] 上下文消息列表。
+        """
+        from astrbot.core.agent.message import Message, ToolCall
+
+        tool_call_id = (
+            (llm_response.tools_call_ids or ["call_1"])[0]
+        )
+        tool_name = (
+            (llm_response.tools_call_name or ["web_search"])[0]
+        )
+        tool_args = (
+            llm_response.tools_call_args[0]
+            if llm_response.tools_call_args
+            else {}
+        )
+
+        contexts = [
+            Message(
+                role="assistant",
+                tool_calls=[
+                    ToolCall(
+                        id=tool_call_id,
+                        function=ToolCall.FunctionBody(
+                            name=tool_name,
+                            arguments=json.dumps(
+                                tool_args, ensure_ascii=False
+                            ),
+                        ),
+                    )
+                ],
+                content=None,
+            ),
+            Message(
+                role="tool",
+                tool_call_id=tool_call_id,
+                content=formatted_results,
+            ),
+        ]
+        return contexts
 
     # ==================================================================
     # 标签富化

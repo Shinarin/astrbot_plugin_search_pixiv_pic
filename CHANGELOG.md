@@ -1,5 +1,18 @@
 # What's Changed
 
+> 📢 v1.0.10 → v1.1.0
+
+## 🔧 优化
+
+- **联网搜索手动工具循环**：LLM 带工具调用后不再依赖 `llm_generate` 自动执行（它不支持），改为插件自行执行 `web_tool.call()` → 格式化原始 JSON 结果 → 构建 OpenAI 工具调用上下文消息 → 回传 LLM 分析。彻底解决 `completion_text=None` 时 `.strip()` 崩溃
+- **角色联网搜索按需触发**：`CHARACTER_RESOLVE_PROMPT` 新增「无角色名判断」规则——只有作品名/属性词（如"碧蓝航线 大胸 黑丝"）时 `need_web_search=false`，不再浪费联网搜索。`resolve_search_intent()` 增加三级门控（有角色+确定 / 无角色 / 有角色+不确定）
+
+## 🐛 修复
+
+- **联网搜索 `completion_text=None` 崩溃**：`(resp.completion_text or "").strip()` 替代 `resp.completion_text.strip()`，防御 LLM 返回 tool_call 时文本为空的场景
+
+---
+
 > 📢 v1.0.9 → v1.0.10
 
 ## 🔧 优化

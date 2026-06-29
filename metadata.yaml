@@ -7,7 +7,7 @@
 
 name: astrbot_plugin_search_pixiv_pic
 desc: "Pixiv 图片检索插件 — 支持按 ID / 标签搜索插画，自然语言意图识别，R18 过滤，智能去重"
-version: 1.0.10
+version: 1.1.0
 author: Shinarin
 
 # 插件仓库地址（可选，用于后续自动更新）

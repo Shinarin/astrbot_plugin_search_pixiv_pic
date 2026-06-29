@@ -543,7 +543,7 @@ class AstrBotPixivPlugin(Star):
         count = max(1, min(count, max_n))
 
         # ---- 角色智能解析（识别游戏+角色，必要时联网搜索） ----
-        resolve_result = await self.intent_parser.resolve_search_intent(tag, event.unified_msg_origin)
+        resolve_result = await self.intent_parser.resolve_search_intent(tag, event, event.unified_msg_origin)
         search_tag = tag  # 用于标签富化的输入
         if resolve_result.get("resolved") and resolve_result.get("character"):
             game = resolve_result.get("game", "")
