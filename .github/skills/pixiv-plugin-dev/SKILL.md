@@ -29,16 +29,17 @@ disable-model-invocation: false
 | 优先级 | 文档 | 链接 |
 |--------|------|------|
 | 🔴 必读 | AstrBot 主仓库 | https://github.com/AstrBotDevs/AstrBot |
-| 🔴 必读 | 插件开发指南（官方文档） | https://astrbot.dev/dev/plugin.html |
-| 🟡 推荐 | 星球 API 参考 | https://astrbot.dev/api/ |
-| 🟡 推荐 | AstrBot 源码 `plugin/star.py` | https://github.com/AstrBotDevs/AstrBot/blob/main/astrbot/core/plugin/star.py |
-| 🟡 推荐 | AstrBot 源码 `plugin/context.py` | https://github.com/AstrBotDevs/AstrBot/blob/main/astrbot/core/plugin/context.py |
-| 🟢 参考 | AstrBot 源码 `message/event.py` | https://github.com/AstrBotDevs/AstrBot/blob/main/astrbot/api/message/event.py |
+| 🔴 必读 | 插件开发指南（官方文档，新版） | https://docs.astrbot.app/dev/star/plugin-new.html |
+| 🟡 推荐 | 插件开发指南（旧版，v4.5.7 前） | https://docs.astrbot.app/dev/star/plugin.html |
+| 🟡 推荐 | AstrBot 源码 `star/star.py` | https://github.com/AstrBotDevs/AstrBot/blob/master/astrbot/core/star/star.py |
+| 🟡 推荐 | AstrBot 源码 `star/context.py` | https://github.com/AstrBotDevs/AstrBot/blob/master/astrbot/core/star/context.py |
+| 🟢 参考 | AstrBot 源码 `platform/astr_message_event.py` | https://github.com/AstrBotDevs/AstrBot/blob/master/astrbot/core/platform/astr_message_event.py |
 
 #### 关键 API 速查
 
 - `Star.__init__(context, config)` → `initialize()` → `terminate()`
-- `Context`: `llm_generate()`, `persona_manager`, `register_llm_tool()`, `provider_manager`
+- `Context`: `llm_generate()`, `persona_manager`, `add_llm_tools()`, `provider_manager`
+  - 注：`register_llm_tool()` 已弃用，新插件请继承 `FunctionTool` 类并通过 `add_llm_tools()` 注册
 - `AstrMessageEvent`: `plain_result()`, `make_result()`, `get_session_id()`, `stop_event()`, `continue_event()`
 - `@command_group()`, `.command()`, `@custom_filter()`, `@on_plugin_error()`
 - 配置: `_conf_schema.json` → WebUI 自动表单 → `AstrBotConfig` 注入
