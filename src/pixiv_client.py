@@ -301,8 +301,8 @@ class PixivClient:
         ),
     }
 
-    # Access Token（由 refresh_token 换取）有效期约 1 小时，每 50 分钟自动刷新
-    _AUTO_REFRESH_INTERVAL = 3000  # 秒
+    # Access Token（由 refresh_token 换取）有效期约 1 小时，每 10 分钟自动刷新（失败也按此间隔重试）
+    _AUTO_REFRESH_INTERVAL = 600  # 秒
 
     def __init__(self, config_mgr) -> None:
         """
@@ -1171,7 +1171,7 @@ class PixivClient:
                 "💡 已连续 2 次搜索无结果。建议：\n"
                 "• 检查 Pixiv 是否可正常访问\n"
                 "• 尝试在 WebUI 重新填写 Refresh Token\n"
-                "• 或等待插件自动刷新（最长 50 分钟）"
+                "• 或等待插件自动刷新（最长 10 分钟）"
             )
         # n >= 3
         return (
@@ -1209,10 +1209,8 @@ class PixivClient:
         Pixiv Access Token（由用户配置的 Refresh Token 换取）有效期约 1 小时，过期后搜索 API 会静默返回空列表。
         提前定时刷新可避免用户突然搜不到图的"幽灵故障"。
         """
-        while self._is_logged_in:
+        while True:
             await asyncio.sleep(self._AUTO_REFRESH_INTERVAL)
-            if not self._is_logged_in:
-                break
             token = self._config.get("pixiv_refresh_token", "")
             if not token:
                 logger.warning("[pixiv:client] ⚠️ 未配置 refresh_token，跳过自动刷新")

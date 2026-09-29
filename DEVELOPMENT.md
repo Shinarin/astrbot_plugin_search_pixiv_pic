@@ -235,7 +235,7 @@ search_by_tags(flat, enrichment)    ← 4 阶段分级搜索
 ### Token 自动刷新
 
 Pixiv 的 Access Token（由用户配置的 Refresh Token 换取）有效期约 1 小时，过期后搜索 API 会**静默返回空列表**（不报错）。
-插件在 `PixivClient.login()` 成功后启动后台 `_auto_refresh_loop()`，每 50 分钟用 refresh_token 重新认证，避免"幽灵故障"。
+插件在 `PixivClient.login()` 成功后启动后台 `_auto_refresh_loop()`，每 10 分钟用 refresh_token 重新认证（失败也按此间隔重试），避免"幽灵故障"。
 
 配套防御措施：
 - `search_by_tag` 检测 API 返回的 `error` 字段（对象和字典两种类型均覆盖）

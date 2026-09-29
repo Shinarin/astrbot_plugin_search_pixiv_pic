@@ -220,17 +220,17 @@ class AstrBotPixivPlugin(Star):
         except Exception as e:
             logger.warning(f"[pixiv] LLM Tool 注册失败: {e}")
 
-    async def _tool_search_by_id(self, event, context, illust_id: int = 0) -> str:
+    async def _tool_search_by_id(self, event, illust_id: int = 0) -> str:
         if not illust_id:
             return "[pixiv] 请提供作品 ID"
         return f"[pixiv] 请使用 /pixiv id {illust_id} 指令来搜索该作品"
 
-    async def _tool_search_by_tag(self, event, context, tag: str = "") -> str:
+    async def _tool_search_by_tag(self, event, tag: str = "") -> str:
         if not tag:
             return "[pixiv] 请提供搜索标签"
         return f"[pixiv] 请使用 /pixiv tag {tag} 指令来搜索相关作品"
 
-    async def _tool_toggle_r18(self, event, context, enable: bool = False) -> str:
+    async def _tool_toggle_r18(self, event, enable: bool = False) -> str:
         action = "开启" if enable else "关闭"
         return f"[pixiv] R18 过滤已{action}"
 
@@ -250,9 +250,9 @@ class AstrBotPixivPlugin(Star):
     async def cmd_pixiv_id(self, event: AstrMessageEvent, illust_id: str = ""):
         """按 Pixiv 作品 ID 搜索插画。"""
         if not self.pixiv_client or not self.pixiv_client.is_logged_in:
-            yield event.plain_result(
-                "⚠️ Pixiv 未登录。请在 WebUI 插件设置页面配置 refresh_token。"
-            )
+            yield event.plain_result("🔄 Pixiv 登录状态已失效，正在重新登录，请稍候...")
+        if not await self._reauth_if_needed():
+            yield event.plain_result(self._login_fail_message())
             return
 
         illust_id_int = self.intent_parser._extract_illust_id(
@@ -513,6 +513,35 @@ class AstrBotPixivPlugin(Star):
             yield r
 
     # ==================================================================
+    # 登录状态自愈
+    # ==================================================================
+
+    async def _reauth_if_needed(self) -> bool:
+        """未登录时立即用配置的 refresh_token 重新登录；返回当前是否可用。"""
+        if self.pixiv_client and self.pixiv_client.is_logged_in:
+            return True
+        token = self.config_mgr.get("pixiv_refresh_token", "")
+        if not token:
+            return False
+        try:
+            logger.info("[pixiv] 检测到登录已失效，正在立即重新登录...")
+            await self.pixiv_client.login(token)
+            logger.info("[pixiv] ✅ 重新登录成功，继续处理请求")
+            return True
+        except Exception as e:
+            logger.warning(f"[pixiv] ⚠️ 重新登录失败: {e}")
+            return False
+
+    def _login_fail_message(self) -> str:
+        """登录失败后的用户提示（区分 token 未配置与重登失败）。"""
+        if not self.config_mgr.get("pixiv_refresh_token", ""):
+            return "⚠️ Pixiv 未登录。请在 WebUI 插件设置页面配置 refresh_token。"
+        return (
+            "⚠️ Pixiv 重新登录失败（可能是网络波动或 refresh_token 已失效）。"
+            "请稍后再试，或使用 /pixiv test 诊断。"
+        )
+
+    # ==================================================================
     # 核心: 按标签搜索并发送多张图片
     # ==================================================================
 
@@ -528,9 +557,9 @@ class AstrBotPixivPlugin(Star):
             count: 需要的图片数量（不超过 max_images_per_request）。
         """
         if not self.pixiv_client or not self.pixiv_client.is_logged_in:
-            yield event.plain_result(
-                "⚠️ Pixiv 未登录。请在 WebUI 插件设置页面配置 refresh_token。"
-            )
+            yield event.plain_result("🔄 Pixiv 登录状态已失效，正在重新登录，请稍候...")
+        if not await self._reauth_if_needed():
+            yield event.plain_result(self._login_fail_message())
             return
 
         if not tag:
